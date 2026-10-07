@@ -329,16 +329,22 @@ var toast=$('toast');
 function say(t){toast.textContent=t; clearTimeout(say.t); say.t=setTimeout(function(){toast.textContent='';},2600);}
 $('copy').onclick=function(){
   if(!lastMasked){ say('먼저 1번에 글을 붙여 넣어 주세요.'); return; }
-  function fallback(){
-    var ta=document.createElement('textarea'); ta.value=lastMasked; ta.style.position='fixed'; ta.style.opacity='0';
-    document.body.appendChild(ta); ta.select();
-    var ok=false; try{ok=document.execCommand('copy');}catch(e){}
-    document.body.removeChild(ta);
-    say(ok?'가린 글을 복사했어요. 이대로 붙여 넣어 보내세요.':'복사가 막혀 있어요. 위 글을 직접 선택해 복사해 주세요.');
-  }
-  if(navigator.clipboard&&window.isSecureContext){
-    navigator.clipboard.writeText(lastMasked).then(function(){say('가린 글을 복사했어요. 이대로 붙여 넣어 보내세요.');},fallback);
-  } else fallback();
+  var OK='가린 글을 복사했어요. 이대로 붙여 넣어 보내세요.',
+      NO='복사가 막혀 있어요. 위 3번 글을 직접 드래그해 복사해 주세요.';
+  // 1차: 클릭 직후 바로 복사(대부분의 브라우저에서 즉시 끝남)
+  var ta=document.createElement('textarea'); ta.value=lastMasked; ta.setAttribute('readonly','');
+  ta.style.position='fixed'; ta.style.top='0'; ta.style.opacity='0';
+  document.body.appendChild(ta); ta.select();
+  var ok=false; try{ok=document.execCommand('copy');}catch(e){}
+  document.body.removeChild(ta);
+  if(ok){ say(OK); return; }
+  // 2차: 클립보드 API. 응답이 없을 때도 안내가 뜨도록 2초 제한
+  if(!(navigator.clipboard&&window.isSecureContext)){ say(NO); return; }
+  var done=false;
+  var t=setTimeout(function(){ if(!done){done=true; say(NO);} },2000);
+  navigator.clipboard.writeText(lastMasked).then(
+    function(){ if(!done){done=true; clearTimeout(t); say(OK);} },
+    function(){ if(!done){done=true; clearTimeout(t); say(NO);} });
 };
 render();
 })();
