@@ -153,6 +153,7 @@ footer p{margin:0 0 6px}
       </div>
       <p><b>카드번호</b>는 Luhn 검증을 통과해야 하는 번호라서, 검증을 더해도 진짜 번호를 하나도 놓치지 않으면서 오탐이 100% → 11.7%로 줄었습니다. 그래서 이 앱은 <b>Luhn을 통과한 16자리만</b> 카드번호로 알립니다.</p>
       <p><b>주민등록번호</b>는 2020년 10월부터 뒷자리가 임의번호로 바뀌어, 옛 검증번호 공식을 필수로 쓰면 새 번호의 90.8%를 놓쳤습니다. 놓친 번호는 곧 막지 못한 유출입니다. 그래서 이 앱은 <b>생년월일·성별 자리까지만 필수</b>로 보고(미탐 0%), 검증번호는 맞으면 “확실함”으로 표시하는 <b>참고용</b>으로만 씁니다.</p>
+      <p><b>논문 밖 추가</b> · “공일공…”처럼 한글로 읽은 숫자나 “０１２”처럼 전각 숫자로 적어 검사를 피하는 경우도 있어서, 숫자 자리가 13개 이상 이어지면 숫자로 바꿔 읽은 뒤 위와 같은 규칙을 적용합니다. 위 표의 “잡힌 수”에는 이렇게 읽은 번호도 들어갑니다.</p>
       <p>한계도 논문 그대로입니다. 16자리 카드만 보며(15자리 카드는 못 찾음), 남는 오탐(카드 약 12%, 주민 약 39%)은 숫자 검사만으로 더 줄지 않았습니다. 그래서 걸린 항목마다 이유를 보여 주고, 최종 판단은 보내는 사람이 하도록 했습니다.</p>
     </div>
   </details>
@@ -202,45 +203,75 @@ function rrnCheckOk(d){                  // R3 (참고용)
 }
 function lineOf(text, idx){ var n=1; for(var i=0;i<idx;i++) if(text.charCodeAt(i)===10) n++; return n; }
 
+/* ---------- 우회 표기 읽기 (논문 밖 추가) ----------
+   '공일공…'처럼 한글로 읽은 숫자, '０１２'처럼 전각 숫자로 적은 번호도
+   한 글자씩 숫자로 바꿔 읽은 뒤 위와 같은 논문 규칙을 그대로 적용합니다.
+   한 글자를 한 글자로 바꾸므로 원래 글의 위치가 그대로 유지됩니다.        */
+var KNUM={'공':'0','영':'0','령':'0','일':'1','이':'2','삼':'3','사':'4','오':'5','육':'6','륙':'6','칠':'7','팔':'8','구':'9'};
+var ALT_RUN=/[0-9０-９공영령일이삼사오육륙칠팔구](?:[- －‐–—]?[0-9０-９공영령일이삼사오육륙칠팔구]){12,}/g;
+function toDigit(c){
+  if(KNUM[c]) return KNUM[c];
+  if('－‐–—'.indexOf(c)>=0) return '-';
+  var k=c.charCodeAt(0); if(k>=0xFF10&&k<=0xFF19) return String.fromCharCode(k-0xFF10+48);
+  return c;
+}
+function normalize(text){
+  // 숫자 자리 13개 이상이 이어진 덩어리(한글·전각 숫자가 하나라도 섞인 것)만 바꿉니다.
+  return text.replace(ALT_RUN,function(run){
+    if(!/[０-９공영령일이삼사오육륙칠팔구－‐–—]/.test(run)) return run;
+    var out=''; for(var i=0;i<run.length;i++) out+=toDigit(run.charAt(i)); return out;
+  });
+}
+var ALT_WHY='한글·전각 숫자나 다른 줄표로 적은 번호를 보통 숫자로 바꿔 읽으니 ';
+
 function analyze(text){
   var res={hits:[], passed:[], c:{C1:0,C2:0,R1:0,R2:0,R3:0}}, m;
+  var conv=normalize(text);
+  function item(kind,m){
+    var raw=text.slice(m.index,m.index+m[0].length);
+    return {kind:kind,start:m.index,end:m.index+m[0].length,raw:raw,conv:m[0],alt:raw!==m[0]};
+  }
+  function why(it,s){ return (it.alt?ALT_WHY+it.conv+'이(가) 돼요. ':'')+s; }
   CARD_RE.lastIndex=0;
-  while((m=CARD_RE.exec(text))){
-    var d=m[0].replace(/\D/g,''); res.c.C1++;
-    if(luhnOk(d)){ res.c.C2++;
-      res.hits.push({kind:'card',start:m.index,end:m.index+m[0].length,raw:m[0],digits:d,level:'hit',
-        why:'16자리 카드번호 모양이고, 카드번호가 반드시 통과하는 검증 공식(Luhn)까지 맞아요. 실제 카드번호일 가능성이 높아요.'});
+  while((m=CARD_RE.exec(conv))){
+    var it=item('card',m), d=m[0].replace(/\D/g,''); it.digits=d; res.c.C1++;
+    if(luhnOk(d)){ res.c.C2++; it.level='hit';
+      it.why=why(it,'16자리 카드번호 모양이고, 카드번호가 반드시 통과하는 검증 공식(Luhn)까지 맞아요. 실제 카드번호일 가능성이 높아요.');
+      res.hits.push(it);
     } else {
-      res.passed.push({kind:'card',start:m.index,raw:m[0],
-        why:'16자리라 카드번호처럼 보이지만 카드번호 검증 공식(Luhn)이 맞지 않아요. 주문번호·일련번호 같은 업무용 숫자로 판단했어요.'});
+      it.why=why(it,'16자리라 카드번호처럼 보이지만 카드번호 검증 공식(Luhn)이 맞지 않아요. 주문번호·일련번호 같은 업무용 숫자로 판단했어요.');
+      res.passed.push(it);
     }
   }
   RRN_RE.lastIndex=0;
-  while((m=RRN_RE.exec(text))){
-    var r=m[0].replace(/\D/g,''); res.c.R1++;
+  while((m=RRN_RE.exec(conv))){
+    var it2=item('rrn',m), r=m[0].replace(/\D/g,''); it2.digits=r; res.c.R1++;
     var dg=dateGender(r);
-    if(!dg.ok){ res.passed.push({kind:'rrn',start:m.index,raw:m[0],why:dg.why}); continue; }
+    if(!dg.ok){ it2.why=why(it2,dg.why); res.passed.push(it2); continue; }
     res.c.R2++;
-    var born=dg.y+'년 '+dg.m+'월 '+dg.day+'일생';
-    if(rrnCheckOk(r)){ res.c.R3++;
-      res.hits.push({kind:'rrn',start:m.index,end:m.index+m[0].length,raw:m[0],digits:r,level:'hit',
-        why:'앞 6자리가 실제 날짜('+born+')이고 성별 자리도 맞아요. 옛 검증번호 공식까지 맞아서 주민등록번호일 가능성이 매우 높아요.'});
-    } else {
-      res.hits.push({kind:'rrn',start:m.index,end:m.index+m[0].length,raw:m[0],digits:r,level:'check',
-        why:'앞 6자리가 실제 날짜('+born+')이고 성별 자리도 맞아요. 옛 검증번호 공식은 맞지 않지만, 2020년 10월 이후 받은 번호는 원래 이 공식을 따르지 않아서 놓치지 않도록 알려 드려요. 결재 문서번호처럼 날짜로 시작하는 숫자일 수도 있으니 한 번 확인해 주세요.'});
+    var g7=r.charAt(6), born=dg.y+'년 '+dg.m+'월 '+dg.day+'일생, 성별 자리 '+g7+' = '+(dg.y<2000?'1900':'2000')+'년대 출생 '+('5678'.indexOf(g7)>=0?'외국인':'내국인');
+    if(rrnCheckOk(r)){ res.c.R3++; it2.level='hit';
+      it2.why=why(it2,'앞 6자리가 실제 날짜('+born+')이고 성별 자리도 맞아요. 옛 검증번호 공식까지 맞아서 주민등록번호일 가능성이 매우 높아요.');
+    } else { it2.level='check';
+      it2.why=why(it2,'앞 6자리가 실제 날짜('+born+')이고 성별 자리도 맞아요. 옛 검증번호 공식은 맞지 않지만, 2020년 10월 이후 받은 번호는 원래 이 공식을 따르지 않아서 놓치지 않도록 알려 드려요. 결재 문서번호처럼 날짜로 시작하는 숫자일 수도 있으니 한 번 확인해 주세요.');
     }
+    res.hits.push(it2);
   }
   res.hits.sort(function(a,b){return a.start-b.start;});
   res.passed.sort(function(a,b){return a.start-b.start;});
   return res;
 }
 function maskOf(h){
-  if(h.kind==='card'){            // 끝 4자리만 남김
-    var k=0, n=h.digits.length;
-    return h.raw.replace(/\d/g,function(c){k++; return k>n-4?c:'●';});
+  // 원래 글자(한글 숫자 포함)를 그대로 두고, 가릴 자리만 ●로 바꿉니다.
+  var n=h.digits.length, k=0, out='';
+  for(var i=0;i<h.raw.length;i++){
+    var isD=/\d/.test(h.conv.charAt(i));
+    if(!isD){ out+=h.raw.charAt(i); continue; }
+    k++;
+    var keep = h.kind==='card' ? k>n-4 : k<=7;   // 카드: 끝 4자리 / 주민: 생년월일+성별
+    out+= keep ? h.raw.charAt(i) : '●';
   }
-  var j=0;                        // 생년월일+성별 자리만 남김
-  return h.raw.replace(/\d/g,function(c){j++; return j<=7?c:'●';});
+  return out;
 }
 function esc(s){return s.replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 
@@ -278,13 +309,13 @@ function render(){
     var li=document.createElement('li');
     var badge=h.level==='hit'?'<span class="badge b-hit">'+(h.kind==='card'?'카드번호':'주민등록번호')+'</span>'
                             :'<span class="badge b-check">주민등록번호 · 확인 필요</span>';
-    li.innerHTML='<div class="top">'+badge+'<span class="num">'+esc(h.raw)+'</span><span class="line">'+lineOf(text,h.start)+'번째 줄</span></div><p class="why">'+esc(h.why)+'</p>';
+    li.innerHTML='<div class="top">'+badge+'<span class="num">'+esc(h.raw)+(h.alt?' → '+esc(h.conv):'')+'</span><span class="line">'+lineOf(text,h.start)+'번째 줄</span></div><p class="why">'+esc(h.why)+'</p>';
     hitsEl.appendChild(li);
   });
   if(res.passed.length){ passWrap.hidden=false;
     res.passed.forEach(function(p){
       var li=document.createElement('li');
-      li.innerHTML='<div class="top"><span class="badge b-pass">걸러냄</span><span class="num">'+esc(p.raw)+'</span><span class="line">'+lineOf(text,p.start)+'번째 줄</span></div><p class="why">'+esc(p.why)+'</p>';
+      li.innerHTML='<div class="top"><span class="badge b-pass">걸러냄</span><span class="num">'+esc(p.raw)+(p.alt?' → '+esc(p.conv):'')+'</span><span class="line">'+lineOf(text,p.start)+'번째 줄</span></div><p class="why">'+esc(p.why)+'</p>';
       passEl.appendChild(li);
     });
   }
